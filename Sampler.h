@@ -27,10 +27,11 @@ public:
 class SimpleSampler : public Sampler
 {
 public:
-    SimpleSampler(unsigned long long rngSeed);
+    SimpleSampler(float temperature, unsigned long long rngSeed);
     size_t sample(FloatTensor const &logits);
 
 private:
+    float temperature;
     unsigned long long rngState;
 
     FloatTensor probs;

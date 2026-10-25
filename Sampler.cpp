@@ -11,7 +11,7 @@ void softmax(FloatTensor const &logits, FloatTensor &dst, float temperature)
 
     // temperature scaling and
     // find max value (for numerical stability)
-    float maxVal = std::numeric_limits<float>::min();
+    float maxVal = std::numeric_limits<float>::lowest();
     for (size_t i = 0; i < dim; ++i)
     {
         dst[i] = logits[i] / temperature;
@@ -50,6 +50,7 @@ size_t sampleFromDistribution(FloatTensor::const_iterator first, FloatTensor::co
                               unsigned long long *rng_state)
 {
     float coin = random_f32(rng_state);
+    size_t const n = std::distance(first, last);
 
     float cdf = 0.0f;
     for (size_t i = 0; first != last; i++, first++)
@@ -58,7 +59,7 @@ size_t sampleFromDistribution(FloatTensor::const_iterator first, FloatTensor::co
         if (coin < cdf)
             return i;
     }
-    return std::distance(first, last) - 1; // in case of rounding errors
+    return n - 1; // in case of rounding errors
 }
 
 size_t sampleFromDistribution(FloatTensor const &probs, unsigned long long *rng_state)
@@ -72,14 +73,15 @@ size_t ArgmaxSampler::sample(FloatTensor const &logits)
     return std::distance(logits.begin(), std::max_element(logits.begin(), logits.end()));
 }
 
-SimpleSampler::SimpleSampler(unsigned long long rngSeed)
-    : rngState(rngSeed)
+SimpleSampler::SimpleSampler(float temperature, unsigned long long rngSeed)
+    : temperature(temperature),
+      rngState(rngSeed)
 {
 }
 
 size_t SimpleSampler::sample(FloatTensor const &logits)
 {
-    softmax(logits, probs, 1.0f);
+    softmax(logits, probs, temperature);
     return sampleFromDistribution(probs, &rngState);
 }
 
@@ -105,13 +107,15 @@ size_t NucleusSampler::sample(FloatTensor const &logits)
             *probindexLast++ = ProbIndex{probs[i], i};
 
     std::sort(probindexFirst, probindexLast,
-              [](auto const &first, auto const &second) { return first.prob >= second.prob; });
+              [](auto const &first, auto const &second) { return first.prob > second.prob; });
 
     float cumulativeProb = 0.0f;
     auto it = probindexFirst;
-    for (; it != probindexLast - 1; ++it)
+    for (; it != probindexLast; ++it)
         if ((cumulativeProb += it->prob) > topP)
             break; // we've exceeded topp by including last_idx
+    if (it == probindexLast)
+        --it; // rounding: never exceeded topP, so use all candidates
 
     size_t ix = sampleFromDistribution(probindexFirst, it + 1, cumulativeProb);
 
@@ -126,7 +130,7 @@ size_t NucleusSampler::sampleFromDistribution(ProbIndex *first, ProbIndex *last,
     auto it = first;
     for (size_t i = 0; it != last; i++, it++)
     {
-        cdf += first->prob;
+        cdf += it->prob;
         if (coin < cdf)
             return i;
     }

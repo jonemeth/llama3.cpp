@@ -232,6 +232,18 @@ struct MyArgs : public argparse::Args
     bool &debug = flag("d", "debug");
 };
 
+std::shared_ptr<Sampler> createSampler(MyArgs const &args, int vocabSize)
+{
+    if (args.temperature < 0.0f)
+        throw std::runtime_error("temperature must be >= 0");
+    if (args.temperature == 0.0f)
+        return std::make_shared<ArgmaxSampler>();
+    if (args.topP <= 0.0f || 1.0f <= args.topP)
+        return std::make_shared<SimpleSampler>(args.temperature, args.rngSeed);
+
+    return std::make_shared<NucleusSampler>(vocabSize, args.temperature, args.topP, args.rngSeed);
+}
+
 int main(int argc, char *argv[])
 {
     auto args = argparse::parse<MyArgs>(argc, argv);
@@ -242,13 +254,14 @@ int main(int argc, char *argv[])
     // build the Transformer via the model .bin file
     Transformer transformer = build_transformer(args.checkpoint_path);
     Tokenizer tokenizer(args.tokenizerPath, transformer.getConfig().vocabSize);
-    NucleusSampler sampler(transformer.getConfig().vocabSize, args.temperature, args.topP, args.rngSeed);
+
+    std::shared_ptr<Sampler> sampler = createSampler(args, transformer.getConfig().vocabSize);
 
     // run!
     if (args.mode == "generate")
-        generate(transformer, tokenizer, sampler, args.prompt, args.steps);
+        generate(transformer, tokenizer, *sampler, args.prompt, args.steps);
     else if (args.mode == "chat")
-        chat(transformer, tokenizer, sampler, args.systemPrompt, args.steps);
+        chat(transformer, tokenizer, *sampler, args.systemPrompt, args.steps);
     else
         std::cerr << "unknown mode: " << args.mode << std::endl;
 

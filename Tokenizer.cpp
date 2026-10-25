@@ -100,10 +100,8 @@ TokenQueue Tokenizer::encode(std::string text, bool bos, bool eos) const
             tokens.push(*id);
         else
             // byte_fallback encoding: just encode each byte as a token
-            // +3 is here because the first 3 vocab elements are <unk>, <s>,
-            // </s> so the individual bytes only start at index 3
             std::transform(strBuffer.begin(), strBuffer.end(), std::back_inserter(tokens),
-                           [](char c) { return 3 + static_cast<unsigned char>(c); });
+                           [this](char c) { return strLookUp(std::string(1, c)).value(); });
 
         strBuffer.clear(); // protect against a sequence of stray UTF8 continuation bytes
     }
