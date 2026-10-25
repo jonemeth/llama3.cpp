@@ -164,22 +164,30 @@ CausalAttention::CausalAttention(size_t seqLength, size_t dim, size_t nHeads, si
 
 void CausalAttention::forward(Tensor &x, Tensor &out)
 {
-    if (pos == keyCache.size())
-    {
-        std::shift_left(keyCache.begin(), keyCache.end(), 1);
-        std::shift_left(valueCache.begin(), valueCache.end(), 1);
-        pos = keyCache.size() - 1;
-    }
+    // keyCache/valueCache are used as a ring buffer: pos is the absolute
+    // token position (used for RoPE), slot is where this token is stored.
+    // The first nSink slots are never overwritten: the model relies on the
+    // initial tokens (BOS) as "attention sinks" and degenerates without them.
+    size_t const seqLength = keyCache.size();
+    size_t const nSink = std::min<size_t>(4, seqLength - 1);
+    size_t const slot = pos < seqLength ? pos : nSink + (pos - nSink) % (seqLength - nSink);
+    size_t const nCached = std::min(pos + 1, seqLength);
 
     // qkv matmuls for this position
     wq.forward(x, query);
-    wk.forward(x, keyCache[pos]);
-    wv.forward(x, valueCache[pos]);
+    wk.forward(x, keyCache[slot]);
+    wv.forward(x, valueCache[slot]);
 
     size_t headSize = dim / nHeads;
-    detail::applyRotaryEmbedding(query.f(), keyCache[pos].f(), pos, nHeads, headSize, nKVHeads);
+    detail::applyRotaryEmbedding(query.f(), keyCache[slot].f(), pos, nHeads, headSize, nKVHeads);
 
     size_t kvMul = nHeads / nKVHeads; // integer multiplier of the kv sharing in multiquery
+    float const scale = 1.0f / std::sqrt(static_cast<float>(headSize));
+
+    // fetch the raw pointers before the parallel region so that threads
+    // don't concurrently modify the Tensors' validity flags
+    float *qf = query.f().data();
+    float *xbf = xb.f().data();
 
     // multihead attention. iterate over all heads
     size_t h;
@@ -188,38 +196,35 @@ void CausalAttention::forward(Tensor &x, Tensor &out)
     for (h = 0; h < nHeads; h++)
     {
         // get the query vector for this head
-        float *q = query.f().data() + h * headSize;
-        auto &attf = att[h].f();
+        float *q = qf + h * headSize;
+        float *attf = att[h].f().data();
 
-        // iterate over all timesteps, including the current one
-        for (size_t t = 0; t <= pos; t++)
+        // iterate over all cached timesteps, including the current one.
+        // The keys already carry their RoPE rotation, so slot order does not matter.
+        for (size_t t = 0; t < nCached; t++)
         {
             // get the key vector for this head and at this timestep
-            float *k = keyCache[t].f().data() + (h / kvMul) * headSize;
+            float const *k = keyCache[t].cf().data() + (h / kvMul) * headSize;
+
             // calculate the attention score as the dot product of q and k
-
-            float score = std::inner_product(q, q + headSize, k, 0.0f);
-
-            // save the score to the attention buffer
-            attf[t] = score / std::sqrt(headSize);
+            attf[t] = std::inner_product(q, q + headSize, k, 0.0f) * scale;
         }
 
-        // softmax the scores to get attention weights, from 0..pos
-        // inclusively
-        detail::softmax(attf.data(), attf.data() + pos + 1);
+        // softmax the scores to get attention weights
+        detail::softmax(attf, attf + nCached);
 
         // weighted sum of the values, store back into xb
-        float *xb = this->xb.f().data() + h * headSize;
+        float *xbh = xbf + h * headSize;
 
-        std::fill(xb, xb + headSize, 0.0f);
-        for (size_t t = 0; t <= pos; t++)
+        std::fill(xbh, xbh + headSize, 0.0f);
+        for (size_t t = 0; t < nCached; t++)
         {
             // get the value vector for this head and at this timestep
-            float *v = valueCache[t].f().data() + (h / kvMul) * headSize;
+            float const *v = valueCache[t].cf().data() + (h / kvMul) * headSize;
 
             // accumulate the weighted value into xb
             for (size_t i = 0; i < headSize; i++)
-                xb[i] += attf[t] * v[i];
+                xbh[i] += attf[t] * v[i];
         }
     }
 
