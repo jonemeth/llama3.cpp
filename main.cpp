@@ -27,7 +27,7 @@ void check_header(std::ifstream &inputStream)
     inputStream.read((char *)(&version), sizeof(version));
 
     if (version != 1)
-        throw std::runtime_error("Bad version "s + std::to_string(version) + "need version 2"s);
+        throw std::runtime_error("Bad version "s + std::to_string(version) + " need version 1"s);
 }
 
 Transformer build_transformer(std::string const &checkpoint_path)
@@ -36,6 +36,7 @@ Transformer build_transformer(std::string const &checkpoint_path)
 
     if (!inputStream.is_open())
         throw std::runtime_error("Can not open file!");
+    inputStream.exceptions(std::ios::failbit | std::ios::badbit);
 
     check_header(inputStream);
 
@@ -50,6 +51,9 @@ Transformer build_transformer(std::string const &checkpoint_path)
 
     Transformer transformer(config);
     transformer.loadWeights(inputStream);
+
+    if (inputStream.peek() != std::ifstream::traits_type::eof())
+        throw std::runtime_error("Trailing data in checkpoint file!");
 
     return transformer;
 }
@@ -138,7 +142,7 @@ void chat(Transformer &transformer, Tokenizer const &tokenizer, Sampler &sampler
     TokenQueue prompt_tokens;
 
     // start the main loop
-    int8_t turn = 0; // user in even turns
+    size_t turn = 0; // user in even turns
     size_t steps = 0;
     int token = 0; // stores the current token to feed into the transformer
     Tensor logits(transformer.getConfig().vocabSize);
@@ -246,25 +250,33 @@ std::shared_ptr<Sampler> createSampler(MyArgs const &args, int vocabSize)
 
 int main(int argc, char *argv[])
 {
-    auto args = argparse::parse<MyArgs>(argc, argv);
+    try
+    {
+        auto args = argparse::parse<MyArgs>(argc, argv);
 
-    if (args.debug)
-        logger.setLevel(Logger::DEBUG);
+        if (args.debug)
+            logger.setLevel(Logger::DEBUG);
 
-    // build the Transformer via the model .bin file
-    Transformer transformer = build_transformer(args.checkpoint_path);
-    Tokenizer tokenizer(args.tokenizerPath, transformer.getConfig().vocabSize);
+        // build the Transformer via the model .bin file
+        Transformer transformer = build_transformer(args.checkpoint_path);
+        Tokenizer tokenizer(args.tokenizerPath, transformer.getConfig().vocabSize);
 
-    std::shared_ptr<Sampler> sampler = createSampler(args, transformer.getConfig().vocabSize);
+        std::shared_ptr<Sampler> sampler = createSampler(args, transformer.getConfig().vocabSize);
 
-    // run!
-    if (args.mode == "generate")
-        generate(transformer, tokenizer, *sampler, args.prompt, args.steps);
-    else if (args.mode == "chat")
-        chat(transformer, tokenizer, *sampler, args.systemPrompt, args.steps);
-    else
-        std::cerr << "unknown mode: " << args.mode << std::endl;
+        // run!
+        if (args.mode == "generate")
+            generate(transformer, tokenizer, *sampler, args.prompt, args.steps);
+        else if (args.mode == "chat")
+            chat(transformer, tokenizer, *sampler, args.systemPrompt, args.steps);
+        else
+            std::cerr << "unknown mode: " << args.mode << std::endl;
 
-    return 0;
+        return 0;
+    }
+    catch (std::exception const &e)
+    {
+        std::cerr << e.what() << '\n';
+        return 1;
+    }
 }
 #endif

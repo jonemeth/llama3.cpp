@@ -62,7 +62,7 @@ def quantize_q80(w, group_size):
     # calculate the scaling factor such that float = quant * scale
     scale = wmax / 127.0
     # scale into range [-127, 127]
-    quant = w / scale[:, None]
+    quant = w / torch.where(scale == 0, 1, scale)[:, None]
     # round to nearest integer
     int8val = torch.round(quant).to(torch.int8)
     # dequantize by rescaling

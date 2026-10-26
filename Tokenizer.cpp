@@ -27,6 +27,12 @@ Tokenizer::Tokenizer(std::string path, int vocabSize)
 
     std::ifstream inputStream(path, std::ios::binary);
 
+    if (!inputStream.is_open())
+    {
+        throw std::runtime_error("Could not open tokenizer file!");
+    }
+    inputStream.exceptions(std::ios::failbit | std::ios::badbit);
+
     inputStream.read((char *)(&maxTokenLength), sizeof(maxTokenLength));
 
     for (int i = 0; i < vocabSize; i++)
@@ -35,12 +41,19 @@ Tokenizer::Tokenizer(std::string path, int vocabSize)
 
         int len;
         inputStream.read((char *)(&len), sizeof(len));
+        if (0 > len || static_cast<unsigned int>(len) > maxTokenLength)
+        {
+            throw std::runtime_error("Wrong string length in vocabulary!");
+        }
 
         std::string str(len, ' ');
         inputStream.read((char *)(&str[0]), len * sizeof(str[0]));
 
         vocab.push_back(str);
     }
+
+    if (inputStream.peek() != std::ifstream::traits_type::eof())
+        throw std::runtime_error("Trailing data in tokenizer file: vocabSize doesn't match");
 
     for (int i = 0; i < vocabSize; i++)
         sortedVocab.insert({&(vocab[i]), i});
@@ -59,7 +72,8 @@ std::optional<std::string> Tokenizer::decode(int token) const
     if (piece[0] == '\0')
         return std::nullopt;
 
-    if (piece[1] == '\0' && !(isprint(piece[0]) || isspace(piece[0])))
+    unsigned char const c = static_cast<unsigned char>(piece[0]);
+    if (piece[1] == '\0' && c < 0x80 && !(isprint(c) || isspace(c)))
         return std::nullopt;
 
     return piece;

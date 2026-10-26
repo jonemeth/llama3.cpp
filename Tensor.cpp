@@ -1,4 +1,5 @@
 #include <cmath>
+#include <stdexcept>
 
 #include "Tensor.h"
 
@@ -20,7 +21,7 @@ inline void quantize(QuantizedTensor &qx, FloatTensor const &x, GroupSize groupS
     {
 
         // find the max absolute value in the current group
-        float wmax = 0.0;
+        float wmax = 0.0f;
         for (size_t i = 0; i < groupSize; i++)
         {
             float val = std::abs(x[group * groupSize + i]);
@@ -31,12 +32,13 @@ inline void quantize(QuantizedTensor &qx, FloatTensor const &x, GroupSize groupS
         // calculate and write the scaling factor
         float scale = wmax / Q_MAX;
         qx.s[group] = scale;
+        float const invScale = scale != 0.0f ? 1.0f / scale : 0.0f;
 
         // calculate and write the quantized values
         for (size_t i = 0; i < groupSize; i++)
         {
-            float quant_value = x[group * groupSize + i] / scale; // scale
-            int8_t quantized = (int8_t)std::round(quant_value);   // round and clamp
+            float quant_value = x[group * groupSize + i] * invScale;         // scale
+            int8_t quantized = static_cast<int8_t>(std::round(quant_value)); // round and clamp
             qx.q[group * groupSize + i] = quantized;
         }
     }
@@ -127,7 +129,7 @@ bool Tensor::isQuantizedValid() const { return isQuantizedValid_; }
 
 void Tensor::readFromFile(std::ifstream &inputStream)
 {
-    GroupSize groupSize;
+    GroupSize groupSize = 0;
     inputStream.read((char *)&groupSize, sizeof(groupSize));
 
     if (0 == groupSize)
@@ -147,6 +149,10 @@ void Tensor::readFloatFromFile(std::ifstream &inputStream)
 
 void Tensor::readQuantizedFromFile(std::ifstream &inputStream, GroupSize groupSize)
 {
+    if (size_ % groupSize != 0)
+    {
+        throw std::runtime_error("Tensor size should be divisible by group-size!");
+    }
     quantizedTensor.groupSize = groupSize;
     quantizedTensor.q.resize(size_);
     quantizedTensor.s.resize(size_ / groupSize);

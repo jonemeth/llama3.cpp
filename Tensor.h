@@ -19,7 +19,7 @@ template <typename T> struct LoggingAllocator : std::allocator<T>
     void deallocate(T *p, std::size_t n)
     {
         logger(Logger::DEBUG) << "Deallocating " << n << " elements" << std::endl;
-        ::operator delete(p);
+        std::allocator<T>::deallocate(p, n);
     }
 };
 
