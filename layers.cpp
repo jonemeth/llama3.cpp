@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <numeric>
 
 #include "layers.h"
@@ -48,19 +49,53 @@ inline void matmulQuantized(FloatTensor &xout, QuantizedTensor const &x, Quantiz
     }
 }
 
-inline void applyRotaryEmbedding(FloatTensor &q, FloatTensor &k, size_t pos, size_t nHeads, size_t headSize,
-                                 size_t n_kv_heads)
+std::vector<float> ropeFrequencies(RopeConfig const &rope, size_t headSize)
+{
+    std::vector<float> freqs(headSize / 2);
+
+    for (size_t j = 0; j < freqs.size(); j++)
+    {
+        float freq = 1.0f / std::pow(rope.theta, 2 * j / static_cast<float>(headSize));
+
+        // Llama 3.1 style scaling to extend the context length: low frequencies
+        // (long wavelengths) are divided by factor, high frequencies are kept,
+        // and the ones in between are smoothly interpolated
+        if (rope.factor > 0.0f)
+        {
+            float const lowFreqWavelen = rope.originalMaxPos / rope.lowFreqFactor;
+            float const highFreqWavelen = rope.originalMaxPos / rope.highFreqFactor;
+            float const wavelen = 2.0f * std::numbers::pi_v<float> / freq;
+
+            if (wavelen > lowFreqWavelen)
+                freq /= rope.factor;
+            else if (wavelen >= highFreqWavelen)
+            {
+                float const smooth = (rope.originalMaxPos / wavelen - rope.lowFreqFactor) /
+                                     (rope.highFreqFactor - rope.lowFreqFactor);
+                freq = (1.0f - smooth) * freq / rope.factor + smooth * freq;
+            }
+        }
+
+        freqs[j] = freq;
+    }
+
+    return freqs;
+}
+
+inline void applyRotaryEmbedding(FloatTensor &q, FloatTensor &k, std::vector<float> const &freqs, size_t pos,
+                                 size_t nHeads, size_t headSize, size_t n_kv_heads)
 {
     // RoPE relative positional encoding: complex-valued rotate q and k in
-    // each head
-    for (size_t i = 0; i < nHeads; i++)
+    // each head. The rotation only depends on pos and j, so it is computed
+    // once for all the heads.
+    for (size_t j = 0; j < headSize; j += 2)
     {
-        for (size_t j = 0; j < headSize; j += 2)
+        float val = static_cast<float>(pos) * freqs[j / 2];
+        float fcr = std::cos(val);
+        float fci = std::sin(val);
+
+        for (size_t i = 0; i < nHeads; i++)
         {
-            float freq = 1.0f / powf(500000.0f, (float)j / (float)headSize);
-            float val = pos * freq;
-            float fcr = std::cos(val);
-            float fci = std::sin(val);
             float q0 = q[i * headSize + j];
             float q1 = q[i * headSize + j + 1];
             q[i * headSize + j] = q0 * fcr - q1 * fci;
@@ -145,11 +180,13 @@ template void Linear::setWeights<Tensor>(Tensor const &w);
 template void Linear::setWeights<FloatTensor>(FloatTensor const &w);
 template void Linear::setWeights<QuantizedTensor>(QuantizedTensor const &w);
 
-CausalAttention::CausalAttention(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads)
+CausalAttention::CausalAttention(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads,
+                                 RopeConfig const &rope)
     : pos(0),
       dim(dim),
       nHeads(nHeads),
       nKVHeads(nKVHeads),
+      ropeFreqs(detail::ropeFrequencies(rope, dim / nHeads)),
       wq(dim, dim),
       wk(dim, dim * nKVHeads / nHeads),
       wv(dim, dim * nKVHeads / nHeads),
@@ -179,7 +216,7 @@ void CausalAttention::forward(Tensor &x, Tensor &out)
     wv.forward(x, valueCache[slot]);
 
     size_t headSize = dim / nHeads;
-    detail::applyRotaryEmbedding(query.f(), keyCache[slot].f(), pos, nHeads, headSize, nKVHeads);
+    detail::applyRotaryEmbedding(query.f(), keyCache[slot].f(), ropeFreqs, pos, nHeads, headSize, nKVHeads);
 
     size_t kvMul = nHeads / nKVHeads; // integer multiplier of the kv sharing in multiquery
     float const scale = 1.0f / std::sqrt(static_cast<float>(headSize));
@@ -282,9 +319,10 @@ void FFN::loadWeights(std::ifstream &inputStream)
     w3.loadWeights(inputStream);
 }
 
-TransformerBlock::TransformerBlock(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads, size_t hiddenDim)
+TransformerBlock::TransformerBlock(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads, size_t hiddenDim,
+                                   RopeConfig const &rope)
     : attentionNorm(dim),
-      attention(seqLength, dim, nHeads, nKVHeads),
+      attention(seqLength, dim, nHeads, nKVHeads, rope),
       ffnNorm(dim),
       ffn(dim, hiddenDim),
       xb(dim, true),

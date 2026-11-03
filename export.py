@@ -33,6 +33,42 @@ from model import ModelArgs, Transformer
 # -----------------------------------------------------------------------------
 # common utilities
 
+# The RoPE parameters are stored in the header after magic, version, 7 ints,
+# shared_classifier and 3 padding bytes, as
+# theta, factor, low_freq_factor, high_freq_factor, original_max_pos
+ROPE_OFFSET = 40
+ROPE_FORMAT = "ffffi"
+
+PRESETS = {
+    "llama3": (500000.0, 0.0, 0.0, 0.0, 0),
+    "llama3.1": (500000.0, 8.0, 1.0, 4.0, 8192),
+    "llama3.2": (500000.0, 32.0, 1.0, 4.0, 8192),
+}
+
+
+def rope_from_hf_config(config):
+    """returns the RoPE parameters of a huggingface config (as a dict)"""
+    theta = config.get("rope_theta", 10000.0)
+    scaling = config.get("rope_scaling")
+    if not scaling:
+        return (theta, 0.0, 0.0, 0.0, 0)
+
+    rope_type = scaling.get("rope_type", scaling.get("type"))
+    if rope_type != "llama3":
+        raise ValueError(f"unsupported rope_scaling type: {rope_type}")
+
+    return (
+        theta,
+        scaling["factor"],
+        scaling["low_freq_factor"],
+        scaling["high_freq_factor"],
+        scaling["original_max_position_embeddings"],
+    )
+
+
+def pack_rope(rope):
+    return struct.pack(ROPE_FORMAT, *rope)
+
 
 def serialize_fp32(file, tensor):
     """writes one fp32 tensor to file that is open in wb mode"""
@@ -105,6 +141,15 @@ def version1_export(model, filepath, group_size):
     # 4) write some other flags
     shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
     out_file.write(struct.pack("B", int(shared_classifier)))
+    # 5) write the RoPE parameters, aligned after 3 padding bytes
+    out_file.write(b"\0" * (ROPE_OFFSET - out_file.tell()))
+    out_file.write(pack_rope((
+        p.rope_theta,
+        p.rope_scaling_factor,
+        p.rope_low_freq_factor,
+        p.rope_high_freq_factor,
+        p.rope_original_max_pos,
+    )))
     pad = 256 - out_file.tell()  # pad rest with zeros; tell returns current pos
     assert pad >= 0
     out_file.write(b"\0" * pad)
@@ -150,6 +195,17 @@ def version1_export(model, filepath, group_size):
     # write to binary file
     out_file.close()
     print(f"wrote {filepath}")
+
+
+def set_rope(config, rope):
+    """sets the RoPE parameters (as stored in the header) of a ModelArgs"""
+    (
+        config.rope_theta,
+        config.rope_scaling_factor,
+        config.rope_low_freq_factor,
+        config.rope_high_freq_factor,
+        config.rope_original_max_pos,
+    ) = rope
 
 
 # -----------------------------------------------------------------------------
@@ -210,6 +266,13 @@ def load_meta_model(model_path):
 
     config.vocab_size = state_dict["tok_embeddings.weight"].shape[0]
     config.max_seq_len = 2048
+
+    # params.json only has a flag for the scaling, the factor is 8 for
+    # Llama 3.1 but 32 for Llama 3.2, which can be set with --rope-preset
+    config.rope_theta = params.get("rope_theta", 10000.0)
+    if params.get("use_scaled_rope"):
+        print("use_scaled_rope is set, assuming Llama 3.1 scaling (use --rope-preset llama3.2 for Llama 3.2)")
+        set_rope(config, PRESETS["llama3.1"])
 
     # create a new Transformer object and set weights
     model = Transformer(config)
@@ -274,6 +337,7 @@ def load_hf_model(model_path):
     config.hidden_dim = hf_model.config.intermediate_size
     config.norm_eps = hf_model.config.rms_norm_eps
     config.max_seq_len = hf_model.config.max_position_embeddings
+    set_rope(config, rope_from_hf_config(hf_model.config.to_dict()))
 
     # create a new Transformer object and set weights
     model = Transformer(config)
@@ -363,6 +427,9 @@ if __name__ == "__main__":
     )
     parser.add_argument('--quantize', action='store_true')
     parser.add_argument(
+        "--rope-preset", choices=PRESETS.keys(), help="override the RoPE parameters of the model"
+    )
+    parser.add_argument(
         "--dtype", type=str, help="dtype of the model (fp16, fp32)", default="fp32"
     )
 
@@ -382,6 +449,9 @@ if __name__ == "__main__":
 
     if model is None:
         parser.error("Can't load input model!")
+
+    if args.rope_preset:
+        set_rope(model.params, PRESETS[args.rope_preset])
 
     # export
     model_export(model, args.filepath, args.version, args.quantize, args.dtype)

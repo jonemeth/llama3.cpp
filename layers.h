@@ -34,10 +34,19 @@ private:
     Tensor weight;
 };
 
+struct RopeConfig
+{
+    float theta;
+    float factor; // 0: no scaling
+    float lowFreqFactor;
+    float highFreqFactor;
+    float originalMaxPos;
+};
+
 class CausalAttention
 {
 public:
-    CausalAttention(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads);
+    CausalAttention(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads, RopeConfig const &rope);
 
     void forward(Tensor &x, Tensor &out);
     void loadWeights(std::ifstream &inputStream);
@@ -47,6 +56,8 @@ private:
     size_t dim;
     size_t nHeads;
     size_t nKVHeads;
+
+    std::vector<float> ropeFreqs; // rotation frequency of each (q0, q1) pair of a head
 
     Linear wq;
     Linear wk;
@@ -85,7 +96,8 @@ private:
 class TransformerBlock
 {
 public:
-    TransformerBlock(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads, size_t hiddenDim);
+    TransformerBlock(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads, size_t hiddenDim,
+                     RopeConfig const &rope);
 
     void forward(Tensor &x, Tensor &out);
     void loadWeights(std::ifstream &inputStream);

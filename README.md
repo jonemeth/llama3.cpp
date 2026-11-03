@@ -30,15 +30,18 @@ To use the Llama3 checkpoints, they need to be converted into a format that can 
 
 ```
 mkdir models
-python3 export.py ./models/Llama3.2-1B.bin --meta-llama <PATH-TO>/Llama3.2-1B/
+python3 export.py ./models/Llama3.2-1B.bin --meta-llama <PATH-TO>/Llama3.2-1B/ --rope-preset llama3.2
 ```
 
 or quantized weights with the `--quantize` flag:
 ```
-python3 export.py ./models/Llama3.2-1B-q80.bin --meta-llama <PATH-TO/Llama3.2-1B/ --quantize
+python3 export.py ./models/Llama3.2-1B-q80.bin --meta-llama <PATH-TO>/Llama3.2-1B/ --rope-preset llama3.2 --quantize
 ```
 
 To convert models downloaded from huggingface use the `--hf` argument instead of `--meta-llama`.
+
+The RoPE parameters (theta and the Llama 3.1 style frequency scaling) are stored in the header of the exported file. They are read from the `config.json` of huggingface models, but Meta's `params.json` doesn't contain the scaling factor: `--meta-llama` exports assume Llama 3.1 (factor 8), so use `--rope-preset llama3.2` (factor 32) for Llama 3.2 models.
+
 
 The following models have been tried:
  * Llama3.1-8B and Llama3.1-8B-Instruct

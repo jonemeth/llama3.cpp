@@ -4,11 +4,38 @@
 
 #include "Transformer.h"
 
+namespace
+{
+
+RopeConfig ropeConfig(Config const &config)
+{
+    // checkpoints exported before the RoPE parameters were added to the
+    // header have zeros there: use the Llama 3 theta without scaling
+    RopeConfig rope{config.ropeTheta, config.ropeFactor, config.ropeLowFreqFactor, config.ropeHighFreqFactor,
+                    static_cast<float>(config.ropeOriginalMaxPos)};
+
+    if (rope.theta == 0.0f)
+        rope.theta = 500000.0f;
+
+    if (rope.factor < 0.0f ||
+        (rope.factor > 0.0f &&
+         (rope.lowFreqFactor <= 0.0f || rope.highFreqFactor <= rope.lowFreqFactor || rope.originalMaxPos <= 0.0f)))
+        throw std::runtime_error("Invalid RoPE scaling parameters in checkpoint!");
+
+    logger(Logger::INFO) << "RoPE theta: " << rope.theta << ", scaling factor: " << rope.factor
+                         << ", low/high freq factor: " << rope.lowFreqFactor << "/" << rope.highFreqFactor
+                         << ", original max pos: " << rope.originalMaxPos << std::endl;
+
+    return rope;
+}
+
+} // namespace
+
 Transformer::Transformer(Config config)
     : config(std::move(config)),
       tokenEmbeddingTable(config.vocabSize * config.dim),
-      layers(config.nLayers,
-             TransformerBlock(config.seqLength, config.dim, config.nHeads, config.nKVHeads, config.hiddenDim)),
+      layers(config.nLayers, TransformerBlock(config.seqLength, config.dim, config.nHeads, config.nKVHeads,
+                                              config.hiddenDim, ropeConfig(config))),
       finalNorm(config.dim),
       output(config.dim, config.vocabSize),
       x(config.dim),

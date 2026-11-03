@@ -23,6 +23,12 @@ class ModelArgs:
     norm_eps: float = 1e-5
     max_seq_len: int = 2048
     dropout: float = 0.0
+    # RoPE, the scaling (Llama 3.1 style) is only stored in the export
+    rope_theta: float = 10000.0
+    rope_scaling_factor: float = 0.0  # 0: no scaling
+    rope_low_freq_factor: float = 0.0
+    rope_high_freq_factor: float = 0.0
+    rope_original_max_pos: int = 0
 
 
 class RMSNorm(torch.nn.Module):
@@ -240,7 +246,7 @@ class Transformer(nn.Module):
 
         # some useful precompute for the RoPE relative positional embeddings
         freqs_cos, freqs_sin = precompute_freqs_cis(
-            self.params.dim // self.params.n_heads, self.params.max_seq_len
+            self.params.dim // self.params.n_heads, self.params.max_seq_len, self.params.rope_theta
         )
         self.register_buffer("freqs_cos", freqs_cos, persistent=False)
         self.register_buffer("freqs_sin", freqs_sin, persistent=False)
