@@ -48,8 +48,6 @@ The following models have been tried:
  * Llama3.2-1B and Llama3.2-1B-Instruct
  * Llama3.2-3B and Llama3.2-3B-Instruct
 
-Converting a 8B model with quantization required ~45G memory (e.g.: 16G RAM and 48G swap) and took 1.5 hours.
-
 ### Run llama3
 The compiled executable can be used with both float32 and quantized models, for example:
 ```

@@ -73,15 +73,13 @@ def pack_rope(rope):
 def serialize_fp32(file, tensor):
     """writes one fp32 tensor to file that is open in wb mode"""
     d = tensor.detach().cpu().view(-1).to(torch.float32).numpy()
-    b = struct.pack(f"{len(d)}f", *d)
-    file.write(b)
+    file.write(memoryview(d))
 
 
 def serialize_int8(file, tensor):
     """writes one int8 tensor to file that is open in wb mode"""
-    d = tensor.detach().cpu().view(-1).numpy().astype(np.int8)
-    b = struct.pack(f"{len(d)}b", *d)
-    file.write(b)
+    d = tensor.detach().cpu().view(-1).numpy().astype(np.int8, copy=False)
+    file.write(memoryview(d))
 
 
 def quantize_q80(w, group_size):
@@ -275,7 +273,8 @@ def load_meta_model(model_path):
         set_rope(config, PRESETS["llama3.1"])
 
     # create a new Transformer object and set weights
-    model = Transformer(config)
+    with torch.device("meta"):
+        model = Transformer(config)
 
     model.tok_embeddings.weight = nn.Parameter(state_dict["tok_embeddings.weight"])
     model.norm.weight = nn.Parameter(state_dict["norm.weight"])
@@ -324,7 +323,7 @@ def load_hf_model(model_path):
         return None
 
     # load HF model
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path)
+    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype="auto")
     hf_dict = hf_model.state_dict()
 
     # convert LlamaConfig to ModelArgs
@@ -340,7 +339,8 @@ def load_hf_model(model_path):
     set_rope(config, rope_from_hf_config(hf_model.config.to_dict()))
 
     # create a new Transformer object and set weights
-    model = Transformer(config)
+    with torch.device("meta"):
+        model = Transformer(config)
 
     model.tok_embeddings.weight = nn.Parameter(hf_dict["model.embed_tokens.weight"])
     model.norm.weight = nn.Parameter(hf_dict["model.norm.weight"])
@@ -398,13 +398,12 @@ def load_hf_model(model_path):
 # API entrypoint
 
 
-def model_export(model, filepath, version, quantize, dtype=torch.float32):
+def model_export(model, filepath, version, quantize):
     """
     Versions docs:
     v-1:huggingface export, i.e. intended for use outside of this repo, in HF
     v1: float32 export
     v2: int8 quantized Q8_0 export, similar to llama.cpp, in groups
-    # TODO: add dtype export support for other versions (?)
     """
     group_size = 64 if quantize else 0
     if version == 1:
@@ -429,16 +428,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--rope-preset", choices=PRESETS.keys(), help="override the RoPE parameters of the model"
     )
-    parser.add_argument(
-        "--dtype", type=str, help="dtype of the model (fp16, fp32)", default="fp32"
-    )
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--checkpoint", type=str, help="model checkpoint, .pt file")
     group.add_argument("--meta-llama", type=str, help="meta llama model path")
     group.add_argument("--hf", type=str, help="huggingface model path")
     args = parser.parse_args()
-    dtype = {"fp16": torch.float16, "fp32": torch.float32}[args.dtype]
 
     if args.checkpoint:
         model = load_checkpoint(args.checkpoint)
@@ -454,4 +449,4 @@ if __name__ == "__main__":
         set_rope(model.params, PRESETS[args.rope_preset])
 
     # export
-    model_export(model, args.filepath, args.version, args.quantize, args.dtype)
+    model_export(model, args.filepath, args.version, args.quantize)
