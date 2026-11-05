@@ -44,9 +44,12 @@ public:
     Config const &getConfig();
 
 private:
+    Tensor const &embeddingTable() const;
+
+private:
     Config config;
 
-    FloatTensor tokenEmbeddingTable; // (vocab_size, dim)
+    Tensor tokenEmbeddingTable; // (vocab_size, dim)
 
     std::vector<TransformerBlock> layers;
     RMSNorm finalNorm;

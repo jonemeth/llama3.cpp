@@ -26,7 +26,7 @@ public:
     void forward(Tensor &x, Tensor &out);
     void loadWeights(std::ifstream &inputStream);
 
-    template <typename T> void setWeights(T const &w);
+    Tensor const &getWeights() const { return weight; }
 
 private:
     size_t inDim;

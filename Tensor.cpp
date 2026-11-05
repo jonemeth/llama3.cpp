@@ -73,6 +73,13 @@ FloatTensor const &Tensor::cf()
     return floatTensor;
 }
 
+FloatTensor const &Tensor::cf() const
+{
+    if (!isFloatValid_)
+        throw std::runtime_error("Trying to access invalid float tensor");
+    return floatTensor;
+}
+
 void Tensor::ensureFloat()
 {
     if (!isFloatValid_)

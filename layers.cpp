@@ -70,8 +70,8 @@ std::vector<float> ropeFrequencies(RopeConfig const &rope, size_t headSize)
                 freq /= rope.factor;
             else if (wavelen >= highFreqWavelen)
             {
-                float const smooth = (rope.originalMaxPos / wavelen - rope.lowFreqFactor) /
-                                     (rope.highFreqFactor - rope.lowFreqFactor);
+                float const smooth =
+                    (rope.originalMaxPos / wavelen - rope.lowFreqFactor) / (rope.highFreqFactor - rope.lowFreqFactor);
                 freq = (1.0f - smooth) * freq / rope.factor + smooth * freq;
             }
         }
@@ -175,13 +175,7 @@ void Linear::forward(Tensor &x, Tensor &out)
 
 void Linear::loadWeights(std::ifstream &inputStream) { weight.readFromFile(inputStream); }
 
-template <typename T> void Linear::setWeights(T const &w) { weight = w; }
-template void Linear::setWeights<Tensor>(Tensor const &w);
-template void Linear::setWeights<FloatTensor>(FloatTensor const &w);
-template void Linear::setWeights<QuantizedTensor>(QuantizedTensor const &w);
-
-CausalAttention::CausalAttention(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads,
-                                 RopeConfig const &rope)
+CausalAttention::CausalAttention(size_t seqLength, size_t dim, size_t nHeads, size_t nKVHeads, RopeConfig const &rope)
     : pos(0),
       dim(dim),
       nHeads(nHeads),

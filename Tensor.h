@@ -43,6 +43,7 @@ public:
 
     FloatTensor &f();
     FloatTensor const &cf();
+    FloatTensor const &cf() const;
 
     QuantizedTensor &q(GroupSize groupSize);
     QuantizedTensor const &cq() const;

@@ -46,35 +46,46 @@ Transformer::Transformer(Config config)
 
 void Transformer::loadWeights(std::ifstream &inputStream)
 {
-    // Read tokenEmbeddingTable which might serve as the weights of
-    // the classifier when sharedClassifier is true.
-    Tensor tet(config.vocabSize * config.dim);
-    tet.readFromFile(inputStream);
-
-    // We always use f32 for tokenEmbeddingTable, but we might use the
-    // quantized values for the classifier so keep them valid by
-    // using the const version of f().
-    this->tokenEmbeddingTable = tet.cf();
+    // the token embedding table is the first tensor in the file. With a
+    // shared classifier it is also the weights of the output layer: then
+    // only load it there, and use it for the embedding lookup too.
+    if (config.sharedClassifier)
+        output.loadWeights(inputStream);
+    else
+        tokenEmbeddingTable.readFromFile(inputStream);
 
     for (int i = 0; i < config.nLayers; ++i)
         layers[i].loadWeights(inputStream);
 
     finalNorm.loadWeights(inputStream);
 
-    if (config.sharedClassifier)
-        if (tet.isQuantizedValid())
-            output.setWeights(tet.cq());
-        else
-            output.setWeights(tet.f());
-    else
+    if (!config.sharedClassifier)
         output.loadWeights(inputStream);
+}
+
+Tensor const &Transformer::embeddingTable() const
+{
+    return config.sharedClassifier ? output.getWeights() : tokenEmbeddingTable;
 }
 
 void Transformer::forward(int token, Tensor &logits)
 {
-    // copy the token embedding into x
-    std::copy(tokenEmbeddingTable.data() + token * config.dim, tokenEmbeddingTable.data() + (1 + token) * config.dim,
-              x.f().data());
+    // copy the token embedding into x, dequantizing that row only when needed
+    Tensor const &table = embeddingTable();
+    size_t const offset = static_cast<size_t>(token) * config.dim;
+    float *xf = x.f().data();
+
+    if (table.isQuantizedValid())
+    {
+        QuantizedTensor const &qt = table.cq();
+        for (int i = 0; i < config.dim; i++)
+            xf[i] = qt.q[offset + i] * qt.s[(offset + i) / qt.groupSize];
+    }
+    else
+    {
+        FloatTensor const &ft = table.cf();
+        std::copy(ft.begin() + offset, ft.begin() + offset + config.dim, xf);
+    }
 
     std::reference_wrapper<Tensor> t1 = x;
     std::reference_wrapper<Tensor> t2 = xb;
